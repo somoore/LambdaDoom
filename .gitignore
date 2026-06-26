@@ -6,9 +6,6 @@ target/
 crash.log
 crash.*.log
 
-CLAUDE.md
-AGENTS.md
-
 capsule/app/*.exe
 capsule/app/*.EXE
 capsule/app/*.wad
