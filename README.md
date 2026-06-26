@@ -41,11 +41,11 @@ sound, click the game, and play (`W A S D` to move, `Ctrl` to fire, `Space` to o
 Hit Suspend when you step away to stop the compute bill, and Resume to pick up where you left
 off.
 
-> **Cost:** a suspended VM is roughly cents per month, and a running, streamed session is
+> **Cost:** a suspended MicroVM is roughly cents per month, and a running, streamed session is
 > roughly $0.19 per hour before data transfer. The actual bill is:
 > `(running vCPU/GB-seconds) + snapshot read/write + snapshot storage + internet data transfer`.
 > Video/audio bitrate, region, and suspend/resume cycles matter. Suspend when you walk away,
-> or run `./uninstall.sh` to remove everything (the VM, the image, the stack, and all local
+> or run `./uninstall.sh` to remove everything (the MicroVM, the image, the stack, and all local
 > state).
 
 > **Browser:** the low-latency H.264/Opus path uses WebCodecs, so use current Chrome or Edge
@@ -65,10 +65,11 @@ state. A normal demo can prove an API works. DOOM lets you feel what the primiti
 
 ## What is happening?
 
-AWS Lambda MicroVMs run your code inside full virtual machines with serverless lifecycle
-control. You get VM isolation, near-instant launch, HTTPS/WSS ingress, and the ability to
-freeze a running machine and resume it later with memory state intact. They are powered by
-Firecracker, the same virtualization behind AWS Lambda. AWS launched them in June 2026:
+AWS Lambda MicroVMs run your code inside Firecracker-backed microVMs with serverless lifecycle
+control. You get hardware virtualization boundaries, near-instant launch, HTTPS/WSS ingress,
+and the ability to freeze a running machine and resume it later with memory state intact. They
+are powered by Firecracker, the same virtualization behind AWS Lambda. AWS launched them in June
+2026:
 [the announcement](https://aws.amazon.com/blogs/aws/run-isolated-sandboxes-with-full-lifecycle-control-aws-lambda-introduces-microvms/).
 
 LambdaDoom uses that primitive as literally as possible: run a native ARM build of Chocolate
@@ -77,19 +78,43 @@ resume the whole machine while the game is still alive.
 
 ## How it works
 
-```
-your machine (thin client)              AWS
-+--------------------------+            +--------------------------------------+
-|  ldoom (Rust CLI)        |  SigV4/SDK |  Lambda MicroVMs control plane        |
-|  build up open suspend.. |----------->|  create-image . run . token . suspend |
-|  loopback proxy          |  injects X-aws-proxy-auth header
-|  127.0.0.1:6080  --------+---- WSS --->  <id>.lambda-microvm.<region>.on.aws
-|  browser tab             |            |  MicroVM (ARM64 Firecracker)          |
-+--------------------------+            |   Chocolate Doom -> H.264 + Opus      |
-                                        +--------------------------------------+
+```mermaid
+flowchart LR
+    subgraph LAPTOP["Your laptop"]
+        CLI["ldoom CLI<br/>build / up / open / suspend"]
+        PROXY["loopback proxy<br/>127.0.0.1:6080"]
+        BROWSER["browser tab<br/>DOOM stream + controls"]
+        CLI --> PROXY
+        BROWSER <-->|HTTP + WebSocket| PROXY
+    end
+
+    subgraph AWS["AWS Lambda MicroVMs"]
+        CONTROL["control plane<br/>image / run / token / suspend / resume"]
+        ENDPOINT["MicroVM endpoint<br/>&lt;id&gt;.lambda-microvm.&lt;region&gt;.on.aws"]
+
+        subgraph MICROVM["Lambda MicroVM<br/>ARM64 Firecracker"]
+            DOOM["Chocolate Doom<br/>native ARM"]
+            DISPLAY["Xvnc display"]
+            VIDEO["H.264 video WS"]
+            AUDIO["Opus audio WS"]
+            INPUT["keyboard input WS"]
+            DOOM --> DISPLAY
+            DISPLAY --> VIDEO
+            DOOM --> AUDIO
+            INPUT --> DOOM
+        end
+
+        CONTROL --> MICROVM
+        ENDPOINT --> VIDEO
+        ENDPOINT --> AUDIO
+        ENDPOINT --> INPUT
+    end
+
+    CLI -->|SigV4 lifecycle calls| CONTROL
+    PROXY <-->|TLS/WSS + X-aws-proxy-auth| ENDPOINT
 ```
 
-A small Rust CLI (`ldoom`) drives the lifecycle. Inside the VM, native ARM Chocolate Doom
+A small Rust CLI (`ldoom`) drives the lifecycle. Inside the MicroVM, native ARM Chocolate Doom
 renders into a headless X server; an encoder streams it as H.264 with Opus audio over
 WebSockets, and the browser decodes it with WebCodecs. The MicroVM endpoint needs an auth
 header that browsers cannot set, so `ldoom open` runs a tiny loopback proxy that injects it.
@@ -161,7 +186,7 @@ the build and execution role ARNs).
 ldoom build      # zip capsule -> S3 -> build image (compiles engine, fetches WAD) -> CREATED
 ldoom up         # launch a MicroVM from the image          (PENDING -> RUNNING)
 ldoom open       # mint a token, open the browser tab, play DOOM
-ldoom suspend    # freeze the VM (compute billing stops)
+ldoom suspend    # freeze the MicroVM (compute billing stops)
 ldoom resume     # thaw on the exact frame
 ldoom down       # terminate the MicroVM (keeps the image so up can relaunch)
 ldoom rm         # full teardown: terminate and delete the image
