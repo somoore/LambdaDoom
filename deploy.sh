@@ -152,7 +152,9 @@ aws cloudformation deploy \
 out(){ aws cloudformation describe-stacks --region "$REGION" --stack-name "$STACK" \
   --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text; }
 BUCKET="$(out ArtifactBucket)"; BUILD_ROLE="$(out BuildRoleArn)"; EXEC_ROLE="$(out ExecutionRoleArn)"
-[ -n "$BUCKET" ] && [ "$BUCKET" != "None" ] || die "could not read stack outputs"
+if [ -z "$BUCKET" ] || [ "$BUCKET" = "None" ]; then
+  die "could not read stack outputs"
+fi
 mkdir -p "$HOME_DIR"
 cat > "$HOME_DIR/config.toml" <<EOF
 region             = "$REGION"
